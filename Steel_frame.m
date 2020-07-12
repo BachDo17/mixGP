@@ -1,13 +1,16 @@
 %% Main optimization algorithm
-clc; clear all
-%% Load steel data
+clc; clear all;close all
+
+%% Load steel catalog
 load('Steeldata.mat');
-%% Load trained model
+
+%% Load trained models
 load('MGP20000_01.mat','subdata1','gprMdl1','MuX1','Priors1','SigmaX1','Mu1','Sigma1','subdata2','gprMdl2','MuX2','Priors2','SigmaX2','Mu2','Sigma2');
-MuX1 = MuX1(1:22,:);
-MuX2 = MuX2(1:24,:);
-SigmaX1 = SigmaX1(1:22,1:22,:);
-SigmaX2 = SigmaX2(1:24,1:24,:);
+%--------------------------------------------------------------------------
+% Serviceability mean vector and covariance matrix
+MuX1 = MuX1(1:22,:); SigmaX1 = SigmaX1(1:22,1:22,:);
+% Strength mean vector and covariance matrix
+MuX2 = MuX2(1:24,:); SigmaX2 = SigmaX2(1:24,1:24,:);
 D1 = size(MuX1,1);
 K1 = size(MuX1,2);
 D2 = size(MuX2,1);
@@ -55,11 +58,14 @@ no_Fy = 23.5; mu_Fy = 1.10*no_Fy; COV_Fy =0.06; sigma_Fy = COV_Fy*mu_Fy;
 no_Fu = 36; mu_Fu = 1.07*no_Fu; COV_Fu =0.08; sigma_Fu = COV_Fu*mu_Fu; 
 %--------------------------------------------------------------------------
 %% Main loop
+% Maximum additinal sampling points
 max_point = 50;
 
+% MGP models for serviceability requirement
 new_gprMdl1 = cell(1,K1,max_point);
 new_gprMdl1{1} = gprMdl1;
 
+% MGP models for strength requirement
 new_gprMdl2 = cell(1,K2,max_point);
 new_gprMdl2{1} = gprMdl2;
 
@@ -67,32 +73,31 @@ new_gprMdl2{1} = gprMdl2;
 lb = ones(1,7);
 ub = 12*ones(1,7);
 
-initialPoint = randi(12,1,7); % Random
+% Random initial point
+initialPoint = randi(12,1,7); 
 lamda = zeros(12,max_point);
 
+% Store output data
 tolerance= zeros(max_point,1);
-
 store_x = zeros(max_point,7);
 store_x(1,:)= initialPoint;
-
 store_fval = zeros(max_point,1);
 store_fval(1,:) = objective(initialPoint,columndata,beamdata);
-
 store_inv = zeros(12,max_point);
 store_constraint = zeros(12,max_point);
 
+% SDO
 for i = 2:max_point
     % Print the current state
     formatSpec = 'Current iteration is %1.0f\n';
     fprintf(formatSpec,i)
    % ga
-    % rng(1,'twister') % for reproducibility
    nvars = 7;
    bound = [lb; ub];
    populationSize = 2000;
    stallGenLimit = 1000;
    generations = 30;
-   intcon = [1 2 3 4 5 6 7];
+   intcon = [1 2 3 4 5 6 7]; % integer design variables
    options = optimoptions('ga','ConstraintTolerance',1e-12,'InitialPopulationMatrix',initialPoint,...
         'InitialPopulationRange',bound,'MaxGenerations',generations,...
         'PopulationSize',populationSize,'MaxStallGenerations',stallGenLimit,...
@@ -103,11 +108,11 @@ for i = 2:max_point
         'PlotFcn', @gaplotbestf);
     [x,fval] = ga(@(x)objective(x,columndata,beamdata),nvars,[],[],[],[],lb,ub,@(x)constraints_real(x,columndata,beamdata,mu_DL,mu_S1,mu_S2,mu_L1,mu_L2,mu_SL,mu_WL,mu_ES,mu_Fy,mu_Fu,new_gprMdl1{i-1},Priors1,MuX1,SigmaX1,new_gprMdl2{i-1},Priors2,MuX2,SigmaX2,lamda(:,i-1)),intcon,options);
     initialPoint = x;
-%     x = round(x)
+    % Store obtained solution
     store_x(i,:) = x;
-%     fval
     store_fval(i,:) = fval;
-    % Mapping
+    
+    % Map integer variables to real ones
     p = MapVariables(x,columndata,beamdata);
     % Depth and web thickness of column and beam sections
     d1 = p(1); tw1 = p(2); d2 = p(4); tw2 = p(5);
@@ -122,12 +127,15 @@ for i = 2:max_point
     store_constraint(1:5,i) = MOGPE(X_mean1, new_gprMdl1{i-1}, Priors1, MuX1, SigmaX1,5);
     store_constraint(6:12,i)  = MOGPE(X_mean2, new_gprMdl2{i-1}, Priors2, MuX2, SigmaX2,7);
     
+    % Inverse SA
     inver_y = inverse_g(x,columndata,beamdata,new_gprMdl1{i-1},Priors1,MuX1,SigmaX1,6.68*10^-2,new_gprMdl2{i-1},Priors2,MuX2,SigmaX2,1.35*10^-3);
     store_inv(:,i) = inver_y;
-    lamda(:,i) = store_constraint(:,i)-inver_y;
     
+    % Update lamda
+    lamda(:,i) = store_constraint(:,i)-inver_y;
     tol = norm(lamda(:,i)- lamda(:,i-1));
     tolerance(i) = tol;
+
     % Check convergence
     if tol < 10^-3
         break;
@@ -135,26 +143,29 @@ for i = 2:max_point
     if store_x(i,:)==store_x(i-1,:)
         break;
     else
-    % Update MGP
+    
+    % Call FEM to estimate new responses
     [maxDrift,peakDrift,MaxNormBeamDis5,MaxNormBeamDis6,MaxNormBeamDis7] = Deformation(mu_DL,mu_S1,mu_S2,mu_L1,mu_L2,mu_SL,mu_WL,mu_ES,...
     d1,tw1,d2,tw2,d3,tw3,d4,tw4,d5,tw5,d6,tw6,d7,tw7);
 
     [Max_PC1,Max_PC2,Max_PC3,Max_PC4,Max_PB5,Max_PB6,Max_PB7,~,~] = Intenalforces(mu_DL,mu_S1,mu_S2,mu_L1,mu_L2,mu_SL,mu_WL,mu_ES,...
          d1,tw1,d2,tw2,d3,tw3,d4,tw4,d5,tw5,d6,tw6,d7,tw7,mu_Fy,mu_Fu);
-     
+
+   % New data points
     new_point1 = [mu_DL mu_S1 mu_S2 mu_L1 mu_L2 mu_SL mu_WL mu_ES d1 tw1 d2 tw2 d3 tw3 d4 tw4 d5 tw5 d6 tw6 d7 tw7...
                  maxDrift peakDrift MaxNormBeamDis5 MaxNormBeamDis6 MaxNormBeamDis7];
-    
     new_point2 = [mu_DL mu_S1 mu_S2 mu_L1 mu_L2 mu_SL mu_WL mu_ES d1 tw1 d2 tw2 d3 tw3 d4 tw4 d5 tw5 d6 tw6 d7 tw7 mu_Fy mu_Fu ...
                  Max_PC1 Max_PC2 Max_PC3 Max_PC4 Max_PB5 Max_PB6 Max_PB7];
-             
+                 
+    % Weight vectors
     w1 = ME_weight(X_mean1,Priors1,MuX1,SigmaX1);
     w2 = ME_weight(X_mean2,Priors2,MuX2,SigmaX2) ; 
+    
+   % Add new points to the training data sets according to max. weights
     [~,cl1]=max(w1); % Clusters that new_point1 belongs to
-%     cl1
     [~,cl2]=max(w2); % Clusters that new_point2 belongs to
-%     cl2
-    % Model 01
+
+    % Update MGP - model 01
     subdata1{cl1}=[subdata1{cl1};new_point1]; % Add new_point1 to the cluster
     % Initial value of theta
     theta01 = 10*ones(1,D1);
@@ -166,7 +177,8 @@ for i = 2:max_point
     gprMdl1{cl1} = dacefit(cluster1(:,1:22), cluster1(:,23:27), @regpoly2, @corrgauss, theta01, lob1, upb1);
     new_gprMdl1{i} = gprMdl1;
     gprMdl1  = new_gprMdl1{i};
-    % Model 02
+
+    % Update MGP-model 02
     subdata2{cl2}=[subdata2{cl2};new_point2]; % Add new_point1 to the cluster
     % Initial value of theta
     theta02 = 10*ones(1,D2);
@@ -181,8 +193,9 @@ for i = 2:max_point
     end
     end
 end
+%% Additional functions
 %--------------------------------------------------------------------------
-%% Objective function
+%% 01 - Objective function
 function f = objective(x,columndata,beamdata)
 x = round(x);
 p = MapVariables(x,columndata,beamdata);
@@ -191,12 +204,11 @@ f = 4*3.5*p(3) + 4*3.5*p(6) + 4*3.5*p(9) + 4*3.5*p(12) +...
     6*6*p(15) + 2*6*p(18) + 4*3*p(21);
 end
 %--------------------------------------------------------------------------
-%% Constraint functions
+%% 02- Constraint functions
 function [c, ceq] = constraints_real(x,columndata,beamdata,mu_DL,mu_S1,mu_S2,mu_L1,mu_L2,mu_SL,mu_WL,mu_ES,mu_Fy,mu_Fu,gprMdl1,Priors1,MuX1,SigmaX1,gprMdl2,Priors2,MuX2,SigmaX2,lamda)
 %   [c, ceq] = calculates the constraints
 % Problem parameters
 p = MapVariables(x,columndata,beamdata);
-
 % Depth and web thickness of column and beam sections
 d1 = p(1); tw1 = p(2); d2 = p(4); tw2 = p(5);
 d3 = p(7); tw3 = p(8); d4 = p(10); tw4 = p(11);
@@ -300,7 +312,7 @@ c = [deform;stress;geometry];
 ceq = [];
 end
 %--------------------------------------------------------------------------
-%% Inverse probability function
+%% 03 - Inverse SA
 function [inv] = inverse_g(x,columndata,beamdata,gprMdl1,Priors1,MuX1,SigmaX1,Pf_expect1,gprMdl2,Priors2,MuX2,SigmaX2,Pf_expect2)
 % Initialization
 p = MapVariables(x,columndata,beamdata);
@@ -538,4 +550,5 @@ for i = 1:length(y2)
     end
 end
 end
+%--------------------------------------------------------------------------
 %--------------------------------------------------------------------------
