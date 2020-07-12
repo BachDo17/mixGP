@@ -1,14 +1,17 @@
 % Local update
 clc; clear all; close all;
+%--------------------------------------------------------------------------
 % Load initial MGP
 load('MoE20000_cop.mat','subdata','gprMdl','Mu','MuX','Priors','Sigma','SigmaX');
 D = size(MuX,1);
 K = size(MuX,2);
-
-max_point = 50; % Maximum addtional points
-new_gprMdl = cell(1,K,max_point);
+%--------------------------------------------------------------------------
+% Maximum addtional points
+max_point = 50; 
+new_gprMdl = cell(1,K,max_point); % Store MGP
 new_gprMdl{1} = gprMdl;
-
+%------------------------------------------------------------------------
+%% Random parameters
 % Normal random samples for P1
 % P1 = 60(kN)
 mu_P1 = 60; COV_P1 =0.2; sigma_P1 = COV_P1*mu_P1; 
@@ -28,19 +31,22 @@ mu_Es = 20000; COV_Es =0.1; sigma_Es = COV_Es*mu_Es;
 % Normal random samples for L
 % L = 100; % cm
 mu_L = 100; COV_L =0.05; sigma_L = COV_L*mu_L; 
-
-%% Optimization for local updating
+%------------------------------------------------------------------------
+%% Main loop
 % Lower and upper bounds of design variables
 lb = ones(1,10);
 ub = 20*ones(1,10);
 initialPoint = 0.5*(lb+ub);
-lamda = zeros(max_point,1);
+lamda = zeros(max_point,1); % Lamda vector
 tole= zeros(max_point,1);
+% Store output data
 store_x = zeros(max_point,10);
 store_x(1,:)= initialPoint;
 store_fval = zeros(max_point,1);
 store_fval(1,:) = objectives_real(initialPoint);
 store_constraint = zeros(max_point,1);
+%------------------------------------------------------------------------
+% SDO
 for i = 2:max_point
     formatSpec = 'Current iteration is %1.0f\n';
     fprintf(formatSpec,i)
@@ -51,13 +57,13 @@ for i = 2:max_point
     store_fval(i,:) = fval; % store objective values
    % Mean vector
     X_mean = [mu_P1 mu_P2 mu_P3 mu_Es mu_L x];
-    % call current constraint function
+    % Call current constraint function
     constr = MOGPE(X_mean, new_gprMdl{i-1}, Priors, MuX, SigmaX); 
-    % store constraint function values
+    % Store constraint function values
     store_constraint(i) = constr; 
-    % inverse SA
+    % Inverse SA
     inver_y = inverse_y(x,new_gprMdl{i-1}, Priors, MuX, SigmaX,0.7*6.21*10^-3);
-    % compute lamda
+    % Update lamda
     lamda(i) = constr-inver_y;
     % stopping criterion
     tol = norm( lamda(i)- lamda(i-1));
@@ -65,10 +71,11 @@ for i = 2:max_point
     if tol < 10^-9
         break;
     else
-    % Update MGP
+    % Call FEM
     g_3 = LSF3(mu_P1,mu_P2,mu_P3,mu_Es,mu_L,x(1),x(2),x(3),x(4),x(5),x(6),x(7),x(8),x(9),x(10));
     % New point
     new_point = [mu_P1 mu_P2 mu_P3 mu_Es mu_L x g_3];
+    % Comput weight vector
     w = ME_weight(new_point,Priors,Mu,Sigma);
     % Clusters that new_point belongs to
     [mx,cl]=max(w); 
@@ -85,13 +92,16 @@ for i = 2:max_point
     gprMdl  = new_gprMdl{i};
     end
 end
+%------------------------------------------------------------------------
+%% Additional functions
+%------------------------------------------------------------------------
 % Objective function
 function y = objectives_real(x)
 y = x(1) + x(2) + x(3) + x(4) + x(5) + x(6) + x(7) + x(8) + x(9) + x(10);
 end
+%------------------------------------------------------------------------
 % Constraint function
 function [c, ceq] = constraints_real(x,mu_P1, mu_P2, mu_P3, mu_Es, mu_L, gprMdl, Priors, MuX, SigmaX,delta)
-
 % Mean vector
 X_mean = [mu_P1 mu_P2 mu_P3 mu_Es mu_L x(1) x(2) x(3) x(4) x(5) x(6) x(7) x(8) x(9) x(10)];
 g_3 = LSF3(mu_P1,mu_P2,mu_P3,mu_Es,mu_L,x(1),x(2),x(3),x(4),x(5),x(6),x(7),x(8),x(9),x(10));
@@ -104,10 +114,10 @@ c = [g_mean];
 % No equality constraints
 ceq = [];
 end
-
+%------------------------------------------------------------------------
 % Inverse SA
 function [inv] = inverse_y(x,gprMdl, Priors, MuX, SigmaX,Pf_expect)
-% RANDOM PARAMETERS
+% Random parameters
 % Normal random samples for P1
 mu_P1 = 60; COV_P1 =0.2; sigma_P1 = COV_P1*mu_P1; 
 %------------------------------------------------------------------------
@@ -168,12 +178,11 @@ for i = 1:length(y2)
         break;
     end
 end
-
 end
-
+%------------------------------------------------------------------------
 function [y] = Limit(u, gprMdl, Priors, MuX, SigmaX)
 X= [u(1) u(2) u(3) u(4) u(5) u(6) u(7) u(8) u(9) u(10) u(11) u(12) u(13) u(14) u(15)];
 y = MOGPE(X, gprMdl, Priors, MuX, SigmaX);
 end
-
+%------------------------------------------------------------------------
 
