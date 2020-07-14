@@ -72,7 +72,7 @@ for i = 2:max_point
         break;
     else
     % Call FEM
-    g_3 = LSF3(mu_P1,mu_P2,mu_P3,mu_Es,mu_L,x(1),x(2),x(3),x(4),x(5),x(6),x(7),x(8),x(9),x(10));
+    g_3 = Truss_FEM(mu_P1,mu_P2,mu_P3,mu_Es,mu_L,x(1),x(2),x(3),x(4),x(5),x(6),x(7),x(8),x(9),x(10));
     % New point
     new_point = [mu_P1 mu_P2 mu_P3 mu_Es mu_L x g_3];
     % Comput weight vector
@@ -104,7 +104,7 @@ end
 function [c, ceq] = constraints_real(x,mu_P1, mu_P2, mu_P3, mu_Es, mu_L, gprMdl, Priors, MuX, SigmaX,delta)
 % Mean vector
 X_mean = [mu_P1 mu_P2 mu_P3 mu_Es mu_L x(1) x(2) x(3) x(4) x(5) x(6) x(7) x(8) x(9) x(10)];
-g_3 = LSF3(mu_P1,mu_P2,mu_P3,mu_Es,mu_L,x(1),x(2),x(3),x(4),x(5),x(6),x(7),x(8),x(9),x(10));
+g_3 = Truss_FEM(mu_P1,mu_P2,mu_P3,mu_Es,mu_L,x(1),x(2),x(3),x(4),x(5),x(6),x(7),x(8),x(9),x(10));
 new_p = [X_mean g_3];
 % Determine constraint value using MGP
 g_mean = -MOGPE(X_mean, gprMdl, Priors, MuX, SigmaX)+delta;
